@@ -53,6 +53,11 @@ public interface IDwgHandler : IDisposable
     List<string> Purge();
 
     /// <summary>
+    /// Statistics summary: counts by entity type, layer, and block.
+    /// </summary>
+    DwgNode Stats();
+
+    /// <summary>
     /// Save changes back to the DWG file.
     /// </summary>
     void Save();

@@ -27,6 +27,7 @@ static partial class CommandBuilder
         rootCommand.Add(BuildBatchCommand(jsonOption));
         rootCommand.Add(BuildNewCommand(jsonOption));
         rootCommand.Add(BuildBlockCommand(jsonOption));
+        rootCommand.Add(BuildStatsCommand(jsonOption));
 
         return rootCommand;
     }

@@ -66,6 +66,16 @@ internal sealed class DwgHandler : IDwgHandler
             }
         };
 
+        // Add layout info
+        var layoutNames = _doc.BlockRecords
+            .Where(br => br.Layout != null)
+            .Select(br => br.Layout!.Name)
+            .Distinct()
+            .ToList();
+        node.Properties["layoutCount"] = layoutNames.Count;
+        if (layoutNames.Count > 0)
+            node.Properties["layoutNames"] = string.Join(", ", layoutNames);
+
         if (_notifications.Count > 0)
             node.Properties["warnings"] = string.Join("; ", _notifications);
 
@@ -78,7 +88,17 @@ internal sealed class DwgHandler : IDwgHandler
         var segments = normalized.Split('/').Where(s => s.Length > 0).ToArray();
 
         if (segments.Length == 0)
-            return GetInfo();
+        {
+            var root = GetInfo();
+            // Include layouts section in root output
+            var layoutsNode = GetLayoutsNode();
+            if (layoutsNode.Children.Count > 0)
+            {
+                root.Children.Add(layoutsNode);
+                root.ChildCount++;
+            }
+            return root;
+        }
 
         return segments[0].ToLowerInvariant() switch
         {
@@ -89,7 +109,9 @@ internal sealed class DwgHandler : IDwgHandler
             "entity" => GetEntityNode(segments.Length > 1 ? segments[1] : null, depth),
             "blocks" => GetBlocksNode(depth),
             "block" => GetBlockNode(segments.Length > 1 ? segments[1] : null, depth),
-            _ => throw new ArgumentException($"Unknown path segment: '{segments[0]}'. Valid: info, layers, layer/<id>, entities, entity/<handle>, blocks, block/<name>")
+            "layouts" => GetLayoutsNode(),
+            "layout" => GetLayoutNode(segments.Length > 1 ? segments[1] : null),
+            _ => throw new ArgumentException($"Unknown path segment: '{segments[0]}'. Valid: info, layers, layer/<id>, entities, entity/<handle>, blocks, block/<name>, layouts, layout/<name>")
         };
     }
 
@@ -433,9 +455,18 @@ internal sealed class DwgHandler : IDwgHandler
         if (layer.LineType != null)
             node.Properties["linetype"] = layer.LineType.Name;
 
+        // Count all entities on this layer (model space + block records)
+        var entityCount = _doc.Entities.Count(e => e.Layer?.Name == layer.Name);
+        foreach (var br in _doc.BlockRecords)
+        {
+            if (br.Name is "*Model_Space" or "*Paper_Space") continue;
+            entityCount += br.Entities.Count(e => e.Layer?.Name == layer.Name);
+        }
+        node.Properties["entityCount"] = entityCount;
+
         if (depth > 0)
         {
-            // Find entities on this layer
+            // Find entities on this layer (model space only for children)
             foreach (var entity in _doc.Entities)
             {
                 if (entity.Layer?.Name == layer.Name && entity.Handle != layer.Handle)
@@ -717,6 +748,7 @@ internal sealed class DwgHandler : IDwgHandler
                 props["width"] = mtext.RectangleWidth;
                 props["rotation"] = RadToDeg(mtext.Rotation);
                 props["text"] = mtext.Value;
+                props["plainText"] = StripMTextFormatCodes(mtext.Value);
                 props["lineCount"] = mtext.GetTextLines()?.Length ?? 0;
                 break;
 
@@ -726,7 +758,13 @@ internal sealed class DwgHandler : IDwgHandler
                 props["scale"] = $"{insert.XScale:F3},{insert.YScale:F3},{insert.ZScale:F3}";
                 props["rotation"] = RadToDeg(insert.Rotation);
                 if (insert.Block != null)
+                {
                     props["blockIsDynamic"] = insert.Block.IsDynamic;
+                    // Map anonymous dynamic blocks (*U*) to their source block definition
+                    var source = insert.Block.Source;
+                    if (source != null)
+                        props["sourceBlock"] = source.Name;
+                }
                 // List attributes attached to this Insert
                 var attrs = insert.Attributes.ToList();
                 if (attrs.Count > 0)
@@ -1213,6 +1251,42 @@ internal sealed class DwgHandler : IDwgHandler
                         if (hasText != wantText) return false;
                     }
                     break;
+
+                case "xmin":
+                    if (double.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out var xMinVal))
+                    {
+                        var pos = GetEntityPosition(entity);
+                        if (pos == null || pos.Value.X < xMinVal)
+                            return false;
+                    }
+                    break;
+
+                case "xmax":
+                    if (double.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out var xMaxVal))
+                    {
+                        var pos = GetEntityPosition(entity);
+                        if (pos == null || pos.Value.X > xMaxVal)
+                            return false;
+                    }
+                    break;
+
+                case "ymin":
+                    if (double.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out var yMinVal))
+                    {
+                        var pos = GetEntityPosition(entity);
+                        if (pos == null || pos.Value.Y < yMinVal)
+                            return false;
+                    }
+                    break;
+
+                case "ymax":
+                    if (double.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out var yMaxVal))
+                    {
+                        var pos = GetEntityPosition(entity);
+                        if (pos == null || pos.Value.Y > yMaxVal)
+                            return false;
+                    }
+                    break;
             }
         }
         return true;
@@ -1570,5 +1644,292 @@ internal sealed class DwgHandler : IDwgHandler
         while (rad < 0) rad += 2 * Math.PI;
         while (rad >= 2 * Math.PI) rad -= 2 * Math.PI;
         return rad;
+    }
+
+    // ======================== MText format code stripping ========================
+
+    /// <summary>
+    /// Strip AutoCAD MText format control codes, returning clean plain text.
+    /// Handles: \P (new paragraph), \pxqc; (paragraph alignment), \L, \l, \O, \o, \K, \k,
+    /// \H, \W, \S, \A, \C, \T, \F, \{fontname}, \~ (non-breaking space), and more.
+    /// </summary>
+    private static string StripMTextFormatCodes(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        // Remove all {...} groups with format codes inside
+        // e.g. {\FCalibri;Hello} → Hello,  {\LHello} → Hello
+        text = Regex.Replace(text, @"\{[^}]*\}", m =>
+        {
+            var inner = m.Value;
+            // Find the last semicolon or start of content after all codes
+            var semicolon = inner.LastIndexOf(';');
+            if (semicolon > 0 && semicolon < inner.Length - 1)
+                return inner[(semicolon + 1)..^1];
+            // No semicolon, strip braces and codes at start
+            var stripped = inner.TrimStart('{');
+            var codeEnd = FindMTextCodeEnd(stripped);
+            return codeEnd > 0 ? stripped[codeEnd..^1] : inner[1..^1];
+        });
+
+        // Replace \P with newline
+        text = text.Replace("\\P", "\n");
+
+        // Replace other common single-char codes
+        text = Regex.Replace(text, @"\\[pP]", "\n");     // paragraph
+        text = Regex.Replace(text, @"\\l", "");           // underline off
+        text = Regex.Replace(text, @"\\L", "");           // underline on
+        text = Regex.Replace(text, @"\\o", "");           // overline off
+        text = Regex.Replace(text, @"\\O", "");           // overline on
+        text = Regex.Replace(text, @"\\k", "");           // strike-through off
+        text = Regex.Replace(text, @"\\K", "");           // strike-through on
+
+        // Remove all remaining \x; format sequences
+        text = Regex.Replace(text, @"\\[a-zA-Z]+[^;]*;", "");
+
+        // Remove standalone codes (e.g. \S, \P that weren't caught)
+        text = Regex.Replace(text, @"\\(?:[pPlLoOKkHWCcFfTtAaSQ]|~)", m =>
+            m.Value switch
+            {
+                "\\P" or "\\p" => "\n",
+                "\\~" => " ",
+                _ => ""
+            });
+
+        // Collapse multiple consecutive whitespace characters into one
+        text = Regex.Replace(text, @"[ \t]+", " ");
+
+        // Trim leading/trailing whitespace per line
+        var lines = text.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+            lines[i] = lines[i].Trim();
+        text = string.Join("\n", lines);
+
+        return text.Trim();
+    }
+
+    private static int FindMTextCodeEnd(string s)
+    {
+        // Find where the format code ends - after a letter sequence optionally followed by params
+        if (s.Length > 0 && char.IsLetter(s[0]))
+        {
+            int i = 1;
+            while (i < s.Length && char.IsLetter(s[i])) i++;
+            // Skip optional parameters (digits, semicolons, etc.)
+            return i;
+        }
+        return 0;
+    }
+
+    // ======================== Stats ========================
+
+    public DwgNode Stats()
+    {
+        var stats = new DwgNode
+        {
+            Path = "/stats",
+            Type = "stats"
+        };
+
+        // 1. Entity type counts
+        var byType = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // 2. Layer counts
+        var byLayer = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // 3. Block reference counts
+        var byBlock = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        int total = 0;
+        void CountEntity(Entity e)
+        {
+            total++;
+            var t = e.ObjectName ?? e.GetType().Name;
+            byType[t] = byType.GetValueOrDefault(t, 0) + 1;
+            var l = e.Layer?.Name ?? "0";
+            byLayer[l] = byLayer.GetValueOrDefault(l, 0) + 1;
+            if (e is Insert ins && ins.Block?.Name != null)
+            {
+                var bn = ins.Block.Name;
+                // Use sourceBlock name if available for anonymous dynamic blocks
+                if (ins.Block.Source != null)
+                    bn = ins.Block.Source.Name;
+                byBlock[bn] = byBlock.GetValueOrDefault(bn, 0) + 1;
+            }
+        }
+
+        foreach (var e in _doc.Entities)
+            CountEntity(e);
+        foreach (var br in _doc.BlockRecords)
+        {
+            if (br.Name is "*Model_Space" or "*Paper_Space") continue;
+            foreach (var e in br.Entities)
+                CountEntity(e);
+        }
+
+        // Entity type summary
+        var typeNode = new DwgNode { Path = "/stats/type", Type = "stats_entityTypes" };
+        foreach (var (k, v) in byType.OrderByDescending(kv => kv.Value))
+            typeNode.Properties[k] = v;
+        typeNode.Properties["_total"] = total;
+        stats.Children.Add(typeNode);
+
+        // Layer summary
+        var layerNode = new DwgNode { Path = "/stats/layer", Type = "stats_layers" };
+        foreach (var (k, v) in byLayer.OrderByDescending(kv => kv.Value))
+            layerNode.Properties[k] = v;
+        stats.Children.Add(layerNode);
+
+        // Block reference summary
+        var blockNode = new DwgNode { Path = "/stats/block", Type = "stats_blocks" };
+        foreach (var (k, v) in byBlock.OrderByDescending(kv => kv.Value))
+            blockNode.Properties[k] = v;
+        stats.Children.Add(blockNode);
+
+        stats.ChildCount = 3;
+        return stats;
+    }
+
+    // ======================== Coordinate-based filtering (for query bbox) ========================
+
+    /// <summary>
+    /// Get the approximate position (X, Y) of an entity for bounding-box filtering.
+    /// Returns null if the entity has no meaningful position.
+    /// </summary>
+    private static (double X, double Y)? GetEntityPosition(Entity entity)
+    {
+        return entity switch
+        {
+            Insert ins => (ins.InsertPoint.X, ins.InsertPoint.Y),
+            Line line => ((line.StartPoint.X + line.EndPoint.X) / 2,
+                          (line.StartPoint.Y + line.EndPoint.Y) / 2),
+            TextEntity t => (t.InsertPoint.X, t.InsertPoint.Y),
+            MText mt => (mt.InsertPoint.X, mt.InsertPoint.Y),
+            Arc a => (a.Center.X, a.Center.Y),
+            Circle c => (c.Center.X, c.Center.Y),
+            Ellipse e => (e.Center.X, e.Center.Y),
+            Point pt => (pt.Location.X, pt.Location.Y),
+            // Polyline2D inherits LwPolyline, so handled by LwPolyline arm below
+            // Polyline3D handles differently
+            LwPolyline lwp when lwp.Vertices.Count > 0 =>
+                (lwp.Vertices.Average(v => v.Location.X),
+                 lwp.Vertices.Average(v => v.Location.Y)),
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Get the bounding box of an entity if available.
+    /// </summary>
+    private static (double XMin, double YMin, double XMax, double YMax)? GetEntityBBox(Entity entity)
+    {
+        try
+        {
+            var box = entity.GetBoundingBox();
+            if (box.Extent == BoundingBoxExtent.Infinite)
+                return null;
+            return (box.Min.X, box.Min.Y, box.Max.X, box.Max.Y);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // ======================== Layout/Viewport helpers ========================
+
+    private DwgNode GetLayoutsNode()
+    {
+        var node = new DwgNode { Path = "/layouts", Type = "layouts" };
+        foreach (var br in _doc.BlockRecords)
+        {
+            if (br.Layout == null) continue;
+            var layoutNode = new DwgNode
+            {
+                Path = $"/layout/{br.Layout.Name}",
+                Type = "layout",
+                Properties = new()
+                {
+                    ["name"] = br.Layout.Name,
+                    ["blockName"] = br.Name,
+                    ["tabOrder"] = br.Layout.TabOrder,
+                    ["minLimits"] = $"{br.Layout.MinLimits.X:F3},{br.Layout.MinLimits.Y:F3}",
+                    ["maxLimits"] = $"{br.Layout.MaxLimits.X:F3},{br.Layout.MaxLimits.Y:F3}",
+                    ["paperWidth"] = br.Layout.PaperWidth,
+                    ["paperHeight"] = br.Layout.PaperHeight,
+                }
+            };
+
+            // Add viewport info
+            var viewports = br.Viewports.ToList();
+            if (viewports.Count > 0)
+            {
+                var vpInfos = viewports.Select(vp =>
+                {
+                    var parts = new List<string>
+                    {
+                        $"center={FormatXYZ(vp.Center)}",
+                        $"width={vp.Width:F1}",
+                        $"height={vp.Height:F1}"
+                    };
+                    if (vp.RepresentsPaper)
+                        parts.Add("paper");
+                    return string.Join(" ", parts);
+                }).ToList();
+                layoutNode.Properties["viewports"] = string.Join("; ", vpInfos);
+                layoutNode.Properties["viewportCount"] = viewports.Count;
+            }
+
+            node.Children.Add(layoutNode);
+            node.ChildCount++;
+        }
+        return node;
+    }
+
+    private DwgNode? GetLayoutNode(string? name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return GetLayoutsNode();
+
+        // Find the block record with matching layout name
+        var br = _doc.BlockRecords.FirstOrDefault(b => b.Layout?.Name.Equals(name, StringComparison.OrdinalIgnoreCase) == true);
+        if (br == null)
+            throw new ArgumentException($"Layout not found: '{name}'");
+
+        var layoutNode = new DwgNode
+        {
+            Path = $"/layout/{br.Layout!.Name}",
+            Type = "layout",
+            Properties = new()
+            {
+                ["name"] = br.Layout.Name,
+                ["blockName"] = br.Name,
+                ["tabOrder"] = br.Layout.TabOrder,
+                ["minLimits"] = $"{br.Layout.MinLimits.X:F3},{br.Layout.MinLimits.Y:F3}",
+                ["maxLimits"] = $"{br.Layout.MaxLimits.X:F3},{br.Layout.MaxLimits.Y:F3}",
+                ["paperWidth"] = br.Layout.PaperWidth,
+                ["paperHeight"] = br.Layout.PaperHeight,
+            }
+        };
+
+        var viewports = br.Viewports.ToList();
+        if (viewports.Count > 0)
+        {
+            var vpInfos = viewports.Select(vp =>
+            {
+                var parts = new List<string>
+                {
+                    $"center={FormatXYZ(vp.Center)}",
+                    $"width={vp.Width:F1}",
+                    $"height={vp.Height:F1}"
+                };
+                if (vp.RepresentsPaper)
+                    parts.Add("paper");
+                return string.Join(" ", parts);
+            }).ToList();
+            layoutNode.Properties["viewports"] = string.Join("; ", vpInfos);
+            layoutNode.Properties["viewportCount"] = viewports.Count;
+        }
+
+        return layoutNode;
     }
 }
