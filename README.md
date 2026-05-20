@@ -49,20 +49,26 @@ dwgcli batch sample.dwg --input commands.json
 | `new` | 创建空白 DWG | [DOCS.md](./DOCS.md#new) |
 | `block import` | 从外部 DWG 导入块定义 | [DOCS.md](./DOCS.md#block-import) |
 | `batch` | 单周期批量执行多条命令 | [DOCS.md](./DOCS.md#batch) |
+| `mcp` | MCP Server（AI 代理集成） | [DOCS.md](./DOCS.md#mcp-server) |
 
 > 完整命令参考、参数说明、JSON 示例、场景用例请查阅 **[DOCS.md](./DOCS.md)**
 
 ## 项目结构
 
 ```
-src/dwgcli/
-├── Program.cs               # 入口
-├── CommandBuilder*.cs       # 命令注册（每个命令一个文件）
-└── Core/
-    ├── IDwgHandler.cs       # 文档操作接口
-    ├── DwgHandler.cs        # 核心实现（~1540 行）
-    ├── DwgNode.cs           # 树节点模型
-    └── OutputFormatter.cs   # 文本/JSON 输出
+src/
+├── dwgcli/                    # CLI 工具
+│   ├── Program.cs             # 入口
+│   ├── CommandBuilder*.cs     # 命令注册（每个命令一个文件）
+│   └── Core/
+│       ├── IDwgHandler.cs     # 文档操作接口
+│       ├── DwgHandler.cs      # 核心实现（~1540 行）
+│       ├── DwgNode.cs         # 树节点模型
+│       └── OutputFormatter.cs # 文本/JSON 输出
+│
+└── dwgcli-mcp/                # MCP Server（AI 代理集成）
+    ├── Program.cs             # 9 个 MCP tools
+    └── DwgHelper.cs           # 内部辅助类
 ```
 
 ## 依赖

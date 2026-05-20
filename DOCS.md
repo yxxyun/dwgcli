@@ -933,3 +933,77 @@ dwgcli block import target.dwg source.dwg --name PUMP_SKID
 - 可以通过 `get /entities` 列出所有实体句柄，或用 `query` 按条件搜索后查看
 - 句柄在文件的整个生命周期内保持不变
 - 格式：16 进制大写字母，如 `/entity/1F3A`
+
+---
+
+## MCP Server
+
+`dwgcli-mcp` 是 dwgcli 的 **Model Context Protocol** 服务器实现，让 AI 代理（如 Claude Desktop、Cursor、VS Code Copilot）直接调用 DWG 操作工具，无需拼接命令行。
+
+### 概述
+
+MCP Server 将 dwgcli 的核心功能暴露为 9 个结构化 MCP tools，通过 stdio 传输与 AI 客户端通信。相比 CLI 方案：
+
+- **结构化参数** — AI 直接传参，无需拼接命令行字符串
+- **统一 JSON 响应** — 所有工具返回标准 JSON，无需解析文本输出
+- **共享核心代码** — 直接引用 ACadSharp 和 DwgHandler，与 CLI 行为一致
+
+**适用场景：** AI 代理需要频繁查询/修改 DWG 文件的对话式工作流。
+
+### 技术栈
+
+- **C# .NET 10** (net10.0)
+- **ModelContextProtocol** v1.3.0 — 官方 MCP C# SDK
+- **Microsoft.Extensions.Hosting** — 宿主框架
+- 通过 `<ProjectReference>` 共享 `dwgcli/` 的核心代码（DwgHandler、DwgNode 等）
+
+### 构建和发布
+
+```bash
+cd src/dwgcli-mcp
+
+# 开发运行
+dotnet run
+
+# 单文件发布
+dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
+```
+
+发布产物：`src/dwgcli-mcp/bin/Release/net10.0/win-x64/publish/dwgcli-mcp.exe`（约 76 MB，self-contained，无需 .NET runtime）。
+
+### MCP Tools 清单
+
+| Tool | 参数 | 说明 |
+|------|------|------|
+| `dwg_info` | `filePath` | 获取文件元信息（版本、作者、实体/图层/块数量） |
+| `dwg_query` | `filePath`, `selector` | 按条件搜索实体（type=Line, layer=0, xMin/xMax 等） |
+| `dwg_get` | `filePath`, `path`, `depth` | 按路径访问文档结构（/layers, /entities, /entity/{handle} 等） |
+| `dwg_stats` | `filePath` | 统计实体数量分布（按类型、图层、块引用） |
+| `dwg_dump` | `filePath`, `depth` | 输出完整文档结构树 |
+| `dwg_set` | `filePath`, `path`, `prop` | 修改实体/图层/文档属性 |
+| `dwg_add` | `filePath`, `parent`, `type`, `prop`, `attr` | 添加实体或图层 |
+| `dwg_remove` | `filePath`, `path` | 删除实体或图层 |
+| `dwg_purge` | `filePath` | 清理未使用的图层、块定义、线型 |
+
+### 客户端配置示例
+
+**Claude Desktop / Cursor / VS Code Copilot：**
+
+```json
+{
+  "mcpServers": {
+    "dwgcli": {
+      "command": "C:\\data\\code\\dwgcli\\src\\dwgcli-mcp\\bin\\Release\\net10.0\\win-x64\\publish\\dwgcli-mcp.exe"
+    }
+  }
+}
+```
+
+### CLI vs MCP 选型建议
+
+| 场景 | 推荐 |
+|------|------|
+| 脚本自动化、CI/CD、批处理 | **CLI** (`dwgcli.exe`) |
+| AI 代理对话式查询/修改 DWG | **MCP** (`dwgcli-mcp.exe`) |
+| 快速一次性查询 | 两者均可 |
+| 多轮对话中频繁操作同一文件 | **MCP**（结构化参数更稳定） |
