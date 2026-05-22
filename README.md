@@ -26,6 +26,21 @@ dwgcli query sample.dwg "type=Insert" --json
 # 按坐标范围过滤（多张图放在一个文件中的场景）
 dwgcli query sample.dwg "type=Insert xMin=13000 xMax=14000" --json
 
+# 搜索包含特定文字的实体
+dwgcli query sample.dwg "text=PAGE1" --json
+
+# 限制查询结果数（先看几条）
+dwgcli query sample.dwg "type=MText limit=5" --json
+
+# 仅统计匹配数量
+dwgcli query sample.dwg "type=Insert count=true"
+
+# 大结果写入文件（避免管道编码问题）
+dwgcli query sample.dwg "hastext=true" --out result.json
+
+# 修改实体文字坐标
+dwgcli set sample.dwg /entity/1F3A --prop insertPoint="18276,85000,0"
+
 # 统计图纸内容
 dwgcli stats sample.dwg --json
 
@@ -62,7 +77,7 @@ src/
 │   ├── CommandBuilder*.cs     # 命令注册（每个命令一个文件）
 │   └── Core/
 │       ├── IDwgHandler.cs     # 文档操作接口
-│       ├── DwgHandler.cs      # 核心实现（~1540 行）
+│       ├── DwgHandler.cs      # 核心实现（~1970 行）
 │       ├── DwgNode.cs         # 树节点模型
 │       └── OutputFormatter.cs # 文本/JSON 输出
 │
