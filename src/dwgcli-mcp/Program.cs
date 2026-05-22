@@ -16,10 +16,10 @@ public sealed class DwgTools
         [Description("Path to the .dwg or .dxf file")] string filePath) =>
         DwgHelper.SafeRun(h => DwgHelper.WrapEnvelope(DwgHelper.FormatNode(h.GetInfo())), filePath);
 
-    [McpServerTool, Description("Query entities/layers by selector. Examples: 'type=Line', 'layer=0', 'type=Circle layer=0', 'type=Insert xMin=13000 xMax=14000'")]
+    [McpServerTool, Description("Query entities/layers by selector. Supports: type=, layer=, text= (fuzzy text match), limit=, count=true, xMin/xMax/yMin/yMax. Examples: 'type=Line', 'layer=Walls', 'type=MText text=PAGE1', 'type=Insert limit=5 count=true'")]
     public static string dwg_query(
         [Description("Path to the .dwg or .dxf file")] string filePath,
-        [Description("Query selector. Supported: type=<EntityType>, layer=<name>, xMin/xMax/yMin/yMax for coordinate filtering")] string selector) =>
+        [Description("Query selector. Fields: type=<EntityType>, layer=<name>, handle=<hex>, color=<ACI>, text=<substring>, hastext=true/false, limit=<n>, count=true, xMin/xMax/yMin/yMax")] string selector) =>
         DwgHelper.SafeRun(h => DwgHelper.WrapEnvelope(DwgHelper.FormatNodes(h.Query(selector))), filePath);
 
     [McpServerTool, Description("Get document structure by path. Paths: /, /info, /layers, /layer/<name>, /entities, /entity/<handle>, /blocks, /block/<name>, /layouts")]
@@ -40,11 +40,11 @@ public sealed class DwgTools
         [Description("Depth of tree output (default: 10)")] int depth = 10) =>
         DwgHelper.SafeRun(h => DwgHelper.WrapEnvelope(DwgHelper.FormatNode(h.Dump(depth))), filePath);
 
-    [McpServerTool, Description("Modify properties on a layer, entity, or document info. Path examples: /layer/Walls, /entity/<handle>, / (for summary info)")]
+    [McpServerTool, Description("Modify properties on a layer, entity, or document info. Path examples: /layer/Walls, /entity/<handle>, / (for summary info). Supported props: color, layer, lineWeight, text, height, startPoint/endPoint/center/radius/insertPoint (XYZ like 10,20,0)")]
     public static string dwg_set(
         [Description("Path to the .dwg or .dxf file")] string filePath,
         [Description("Path to the element. Examples: /layer/Walls, /entity/<handle>, /")] string path,
-        [Description("Properties to set as key=value pairs. Examples: color=red, lineWeight=0.5")] string[] prop) =>
+        [Description("Properties to set as key=value pairs. Examples: color=red, insertPoint=10,20,0, text='Hello'")] string[] prop) =>
         DwgHelper.SafeRun(h =>
         {
             var properties = DwgHelper.ParseProps(prop);
