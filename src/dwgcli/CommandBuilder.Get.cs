@@ -25,6 +25,12 @@ static partial class CommandBuilder
         cmd.Add(depthOpt);
         cmd.Add(jsonOption);
 
+        var outOpt = new Option<string?>("--out", "-o")
+        {
+            Description = "Write output to file instead of stdout"
+        };
+        cmd.Add(outOpt);
+
         cmd.SetAction(result =>
         {
             var json = result.GetValue(jsonOption);
@@ -33,6 +39,7 @@ static partial class CommandBuilder
                 var file = result.GetValue(fileArg)!;
                 var path = result.GetValue(pathArg)!;
                 var depth = result.GetValue(depthOpt);
+                var outPath = result.GetValue(outOpt);
 
                 using var handler = DwgHandlerFactory.Open(file.FullName);
                 var node = handler.Get(path, depth);
@@ -40,10 +47,25 @@ static partial class CommandBuilder
                 var format = json ? OutputFormat.Json : OutputFormat.Text;
                 var output = OutputFormatter.FormatNode(node, format);
 
-                if (json)
-                    Console.WriteLine(OutputFormatter.WrapEnvelope(output));
+                if (outPath == "-") outPath = null;
+                if (outPath != null)
+                {
+                    File.WriteAllText(outPath, output);
+                    if (json)
+                    {
+                        var resultStr = $"{{\"outputFile\":\"{outPath.Replace("\\", "\\\\")}\"}}";
+                        Console.WriteLine(OutputFormatter.WrapEnvelope(resultStr));
+                    }
+                    else
+                        Console.WriteLine(outPath);
+                }
                 else
-                    Console.WriteLine(output);
+                {
+                    if (json)
+                        Console.WriteLine(OutputFormatter.WrapEnvelope(output));
+                    else
+                        Console.WriteLine(output);
+                }
 
                 return 0;
             }, json);

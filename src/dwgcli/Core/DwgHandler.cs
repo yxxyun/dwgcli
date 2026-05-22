@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using ACadSharp;
 using ACadSharp.Entities;
@@ -510,7 +511,7 @@ internal sealed class DwgHandler : IDwgHandler
         ExtractEntityProperties(entity, node.Properties);
 
         // For text entities, surface the text content
-        node.Text = GetEntityText(entity);
+        node.Text = SanitizeForJson(GetEntityText(entity) ?? "");
 
         if (depth > 0 && entity is Insert insert && insert.Block != null)
         {
@@ -1025,6 +1026,18 @@ internal sealed class DwgHandler : IDwgHandler
                     else unsupported.Add($"{key}={val}");
                     break;
 
+                case "insertpoint":
+                case "insertPoint":
+                case "InsertPoint":
+                    if (entity is TextEntity text_ip)
+                    {
+                        var pt = ParseXYZFromString(val);
+                        if (pt.HasValue) { text_ip.InsertPoint = pt.Value; _modified = true; }
+                        else unsupported.Add($"{key}={val}");
+                    }
+                    else unsupported.Add($"{key} only valid for Text/MText/Insert entities");
+                    break;
+
                 default:
                     unsupported.Add(key);
                     break;
@@ -1251,6 +1264,16 @@ internal sealed class DwgHandler : IDwgHandler
                         if (hasText != wantText) return false;
                     }
                     break;
+
+                case "text":
+                {
+                    // Case-insensitive contains (substring) search in text content
+                    var entityText = GetEntityText(entity);
+                    if (entityText == null) return false;
+                    if (entityText.IndexOf(val, StringComparison.OrdinalIgnoreCase) < 0)
+                        return false;
+                    break;
+                }
 
                 case "xmin":
                     if (double.TryParse(val, NumberStyles.Any, CultureInfo.InvariantCulture, out var xMinVal))
@@ -1706,7 +1729,7 @@ internal sealed class DwgHandler : IDwgHandler
             lines[i] = lines[i].Trim();
         text = string.Join("\n", lines);
 
-        return text.Trim();
+        return SanitizeForJson(text.Trim());
     }
 
     private static int FindMTextCodeEnd(string s)
@@ -1720,6 +1743,22 @@ internal sealed class DwgHandler : IDwgHandler
             return i;
         }
         return 0;
+    }
+
+    /// <summary>
+    /// Strip control characters (U+0000-U+001F) from text to ensure valid JSON output.
+    /// Allows \t, \n, \r which are valid in JSON strings.
+    /// </summary>
+    private static string SanitizeForJson(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        var cleaned = new StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (c >= 0x20 || c is '\t' or '\n' or '\r')
+                cleaned.Append(c);
+        }
+        return cleaned.ToString();
     }
 
     // ======================== Stats ========================

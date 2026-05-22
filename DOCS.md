@@ -71,7 +71,7 @@ dotnet run -- <args>
 **语法：**
 
 ```bash
-dwgcli info <file> [--json]
+dwgcli info <file> [--out <file>] [--json]
 ```
 
 **参数：**
@@ -79,6 +79,7 @@ dwgcli info <file> [--json]
 | 参数 | 说明 |
 |------|------|
 | `file` | DWG/DXF 文件路径 |
+| `--out` / `-o` | 写入文件（替代 stdout） |
 
 **JSON 输出示例：**
 
@@ -121,7 +122,7 @@ dwgcli info <file> [--json]
 **语法：**
 
 ```bash
-dwgcli get <file> <path> [--depth <n>] [--json]
+dwgcli get <file> <path> [--depth <n>] [--out <file>] [--json]
 ```
 
 **参数：**
@@ -131,6 +132,7 @@ dwgcli get <file> <path> [--depth <n>] [--json]
 | `file` | DWG/DXF 文件路径 |
 | `path` | 文档路径（见下方路径说明） |
 | `--depth` | 子节点展开深度，默认 1，0 表示不展开子节点 |
+| `--out` / `-o` | 写入文件（替代 stdout） |
 
 **支持路径：**
 
@@ -213,7 +215,7 @@ dwgcli get drawing.dwg /layout/Model --json
 **语法：**
 
 ```bash
-dwgcli query <file> <selector> [--json]
+dwgcli query <file> <selector> [--out <file>] [--json]
 ```
 
 **参数：**
@@ -222,6 +224,7 @@ dwgcli query <file> <selector> [--json]
 |------|------|
 | `file` | DWG/DXF 文件路径 |
 | `selector` | 空格/逗号/分号分隔的 `key=value` 条件 |
+| `--out` / `-o` | 写入文件（文件名后缀建议 .json） |
 
 **选择器语法：**
 
@@ -239,8 +242,11 @@ type=Line layer=Walls xMin=0 xMax=1000 yMin=0 yMax=1000
 | `color=` | 按 ACI 颜色索引匹配 | `color=1`（红色） |
 | `linetype=` | 按线型名匹配 | `linetype=Continuous` |
 | `hastext=` | 是否为文本类实体 | `hastext=true` |
+| `text=` | 按文本内容模糊搜索（大小写不敏感，包含匹配） | `text=PAGE1`、`text=KKS` |
 | `xmin=`/`xmax=` | X 坐标范围过滤（使用实体中心点近似） | `xmin=13000` `xmax=14000` |
 | `ymin=`/`ymax=` | Y 坐标范围过滤 | `ymin=0` `ymax=500` |
+| `limit=` | 限制返回结果数（0=不返回任何数据） | `limit=50` |
+| `count=true` | 仅返回匹配数量，不返回实体数据 | `count=true` |
 
 **图层搜索（`target=layers`）：**
 
@@ -359,7 +365,7 @@ dwgcli dump drawing.dwg --out structure.txt
 **语法：**
 
 ```bash
-dwgcli stats <file> [--json]
+dwgcli stats <file> [--out <file>] [--json]
 ```
 
 **参数：**
@@ -367,6 +373,7 @@ dwgcli stats <file> [--json]
 | 参数 | 说明 |
 |------|------|
 | `file` | DWG/DXF 文件路径 |
+| `--out` / `-o` | 写入文件（替代 stdout） |
 
 **JSON 输出示例：**
 
@@ -500,7 +507,8 @@ dwgcli set <file> <path> --prop key=value [--prop ...] [--dry-run] [--json]
 | `/entity/{handle}` | `layer` `color` `linetype` `lineweight` `transparency`(0-90) `material` `invisible` `linetypescale` |
 | 实体几何（Line） | `startpoint` `endpoint` |
 | 实体几何（Circle/Arc） | `center` `radius` |
-| 实体几何（Text/MText） | `text` `height` |
+| 实体几何（Text/MText） | `text` `height` `insertpoint`（XYZ 坐标） |
+| 实体几何（Insert） | `insertpoint`（XYZ 坐标） |
 
 **颜色值格式：** ACI 索引 (1-255)、`#RRGGBB` 十六进制、命名颜色（red/yellow/green/cyan/blue/magenta/white/black）或 `ByLayer`/`ByBlock`。
 

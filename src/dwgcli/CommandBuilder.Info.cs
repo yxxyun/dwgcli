@@ -13,22 +13,44 @@ static partial class CommandBuilder
         cmd.Add(fileArg);
         cmd.Add(jsonOption);
 
+        var outOpt = new Option<string?>("--out", "-o")
+        {
+            Description = "Write output to file instead of stdout"
+        };
+        cmd.Add(outOpt);
+
         cmd.SetAction(result =>
         {
             var json = result.GetValue(jsonOption);
             return SafeRun(() =>
             {
                 var file = result.GetValue(fileArg)!;
+                var outPath = result.GetValue(outOpt);
                 using var handler = DwgHandlerFactory.Open(file.FullName);
                 var node = handler.GetInfo();
 
                 var format = json ? OutputFormat.Json : OutputFormat.Text;
                 var output = OutputFormatter.FormatNode(node, format);
 
-                if (json)
-                    Console.WriteLine(OutputFormatter.WrapEnvelope(output));
+                if (outPath == "-") outPath = null;
+                if (outPath != null)
+                {
+                    File.WriteAllText(outPath, output);
+                    if (json)
+                    {
+                        var result = $"{{\"outputFile\":\"{outPath.Replace("\\", "\\\\")}\"}}";
+                        Console.WriteLine(OutputFormatter.WrapEnvelope(result));
+                    }
+                    else
+                        Console.WriteLine(outPath);
+                }
                 else
-                    Console.WriteLine(output);
+                {
+                    if (json)
+                        Console.WriteLine(OutputFormatter.WrapEnvelope(output));
+                    else
+                        Console.WriteLine(output);
+                }
 
                 return 0;
             }, json);
