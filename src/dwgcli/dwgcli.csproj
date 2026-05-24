@@ -12,10 +12,12 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="dwgcli-mcp" />
+    <InternalsVisibleTo Include="dwgcli.Tests" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="ACadSharp" Version="3.4.9" />
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="System.CommandLine" Version="3.0.0-preview.2.26159.112" />
   </ItemGroup>
 

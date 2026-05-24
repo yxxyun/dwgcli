@@ -1,5 +1,6 @@
 using ACadSharp;
 using ACadSharp.IO;
+using DwgCli.Core.Exceptions;
 
 namespace DwgCli.Core;
 
@@ -11,7 +12,7 @@ internal static class DwgHandlerFactory
     public static IDwgHandler Open(string filePath, bool editable = false)
     {
         if (!File.Exists(filePath))
-            throw new FileNotFoundException($"File not found: {filePath}", filePath);
+            throw new DwgFileNotFoundException(filePath);
 
         var ext = Path.GetExtension(filePath).ToLowerInvariant();
         switch (ext)
@@ -21,7 +22,7 @@ internal static class DwgHandlerFactory
             case ".dxf":
                 return OpenDxf(filePath, editable);
             default:
-                throw new NotSupportedException($"Unsupported file type: {ext}. Supported: .dwg, .dxf");
+                throw new DwgNotSupportedException("file type", $"Unsupported file type: {ext}. Supported: .dwg, .dxf");
         }
     }
 
@@ -39,7 +40,7 @@ internal static class DwgHandlerFactory
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Failed to read DWG file: {ex.Message}", ex);
+            throw new DwgOperationException("read", $"Failed to read DWG file: {ex.Message}", ex);
         }
 
         return new DwgHandler(filePath, doc, editable, notifications);
@@ -59,7 +60,7 @@ internal static class DwgHandlerFactory
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Failed to read DXF file: {ex.Message}", ex);
+            throw new DwgOperationException("read", $"Failed to read DXF file: {ex.Message}", ex);
         }
 
         return new DwgHandler(filePath, doc, editable, notifications);

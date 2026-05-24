@@ -1,75 +1,75 @@
-using ACadSharp;
-using ACadSharp.IO;
-using DwgCli.Core;
-using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using DwgCli.Core;
 
 namespace DwgCli.Mcp;
 
 /// <summary>
-/// Opens DWG/DXF files and returns an IDwgHandler.
-/// Duplicated from dwgcli/Core/DwgHandlerFactory.cs (internal) to avoid modifying existing code.
+/// Helper for MCP server tools: opens DWG/DXF files, executes operations,
+/// and formats JSON output.
 /// </summary>
 internal static class DwgHelper
 {
+    // ==================== File Open (delegates to DwgHandlerFactory) ====================
+
+    /// <summary>
+    /// Opens a DWG or DXF file and returns an IDwgHandler.
+    /// Delegates to DwgHandlerFactory in the core library.
+    /// </summary>
     public static IDwgHandler Open(string filePath, bool editable = false)
-    {
-        if (!File.Exists(filePath))
-            throw new FileNotFoundException($"File not found: {filePath}", filePath);
+        => DwgHandlerFactory.Open(filePath, editable);
 
-        var ext = Path.GetExtension(filePath).ToLowerInvariant();
-        return ext switch
-        {
-            ".dwg" => OpenDwg(filePath, editable),
-            ".dxf" => OpenDxf(filePath, editable),
-            _ => throw new NotSupportedException($"Unsupported file type: {ext}. Supported: .dwg, .dxf"),
-        };
-    }
+    // ==================== Execution helpers ====================
 
-    private static IDwgHandler OpenDwg(string filePath, bool editable)
+    /// <summary>
+    /// Execute a read-only operation with automatic error wrapping.
+    /// </summary>
+    public static string ExecuteRead(string filePath, Func<IDwgHandler, string> action)
     {
-        var notifications = new List<string>();
-        CadDocument doc;
         try
         {
-            doc = DwgReader.Read(filePath, (_, e) =>
-            {
-                if (e.NotificationType is NotificationType.Warning or NotificationType.Error)
-                    notifications.Add($"[{e.NotificationType}] {e.Message}");
-            });
+            using var handler = Open(filePath, false);
+            return action(handler);
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Failed to read DWG file: {ex.Message}", ex);
+            return WrapEnvelopeError(ex.Message);
         }
-        return new DwgHandler(filePath, doc, editable, notifications);
     }
 
-    private static IDwgHandler OpenDxf(string filePath, bool editable)
+    /// <summary>
+    /// Execute a write operation with automatic error wrapping and save.
+    /// </summary>
+    public static string ExecuteWrite(string filePath, Func<IDwgHandler, string> action)
     {
-        var notifications = new List<string>();
-        CadDocument doc;
         try
         {
-            doc = DxfReader.Read(filePath, (_, e) =>
-            {
-                if (e.NotificationType is NotificationType.Warning or NotificationType.Error)
-                    notifications.Add($"[{e.NotificationType}] {e.Message}");
-            });
+            using var handler = Open(filePath, true);
+            var result = action(handler);
+            handler.Save();
+            return result;
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Failed to read DXF file: {ex.Message}", ex);
+            return WrapEnvelopeError(ex.Message);
         }
-        return new DwgHandler(filePath, doc, editable, notifications);
+    }
+
+    /// <summary>
+    /// Execute an operation with automatic error wrapping (backward compatible).
+    /// </summary>
+    public static string SafeRun(Func<IDwgHandler, string> action, string filePath, bool editable = false)
+    {
+        if (editable)
+            return ExecuteWrite(filePath, action);
+        return ExecuteRead(filePath, action);
     }
 
     // ==================== JSON Output Helpers ====================
 
-    private static readonly JsonSerializerOptions JsonOpts = new()
+    internal static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -82,15 +82,28 @@ internal static class DwgHelper
     public static string FormatNodes(List<DwgNode> nodes) =>
         JsonSerializer.Serialize(new { matches = nodes.Count, results = nodes }, JsonOpts);
 
-    public static string WrapEnvelope(string dataJson)
+    /// <summary>UI resource type hints for MCP client rendering.</summary>
+    public static class UiType
+    {
+        public const string Table = "table";
+        public const string List = "list";
+        public const string Tree = "tree";
+        public const string Text = "text";
+        public const string Json = "json";
+    }
+
+    /// <summary>Wrap data with success envelope and optional UI metadata.</summary>
+    public static string WrapEnvelope(string dataJson, string? uiType = null)
     {
         var envelope = new JsonObject { ["success"] = true };
         try { envelope["data"] = JsonNode.Parse(dataJson); }
         catch { envelope["data"] = dataJson; }
+        AddMeta(envelope, uiType);
         return envelope.ToJsonString(JsonOpts);
     }
 
-    public static string WrapEnvelopeText(string message)
+    /// <summary>Wrap a text message with success envelope and optional UI metadata.</summary>
+    public static string WrapEnvelopeText(string message, string? uiType = null)
     {
         var envelope = new JsonObject
         {
@@ -98,6 +111,7 @@ internal static class DwgHelper
             ["data"] = message,
             ["message"] = message
         };
+        AddMeta(envelope, uiType);
         return envelope.ToJsonString(JsonOpts);
     }
 
@@ -111,18 +125,22 @@ internal static class DwgHelper
         return envelope.ToJsonString(JsonOpts);
     }
 
-    public static string SafeRun(Func<IDwgHandler, string> action, string filePath, bool editable = false)
+    /// <summary>Add _meta.ui.resourceUri to the envelope for MCP Apps compatible clients.</summary>
+    private static void AddMeta(JsonObject envelope, string? uiType)
     {
-        try
+        if (string.IsNullOrEmpty(uiType)) return;
+
+        envelope["_meta"] = new JsonObject
         {
-            using var handler = Open(filePath, editable);
-            return action(handler);
-        }
-        catch (Exception ex)
-        {
-            return WrapEnvelopeError(ex.Message);
-        }
+            ["ui"] = new JsonObject
+            {
+                ["resourceUri"] = $"ui://dwgcli/{uiType}",
+                ["type"] = uiType
+            }
+        };
     }
+
+    // ==================== Property parsing ====================
 
     public static Dictionary<string, string> ParseProps(string[]? props)
     {

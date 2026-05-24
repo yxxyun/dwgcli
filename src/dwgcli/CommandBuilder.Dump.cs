@@ -11,7 +11,7 @@ static partial class CommandBuilder
         var fileArg = new Argument<FileInfo>("file") { Description = "DWG file path" };
         var formatOpt = new Option<string>("--format")
         {
-            Description = "Output format: 'tree' (default, structure tree) or 'batch' (replayable batch script)",
+            Description = "Output format: 'tree' (default, structure tree), 'batch' (replayable batch script), or 'csv' (entity data as CSV)",
             DefaultValueFactory = _ => "tree"
         };
         var depthOpt = new Option<int>("--depth")
@@ -41,8 +41,8 @@ static partial class CommandBuilder
                 var depth = result.GetValue(depthOpt);
                 var outPath = result.GetValue(outOpt);
 
-                if (format != "tree" && format != "batch")
-                    throw new ArgumentException($"Unsupported --format: '{format}'. Valid: tree, batch");
+                if (format != "tree" && format != "batch" && format != "csv" && format != "excel")
+                    throw new ArgumentException($"Unsupported --format: '{format}'. Valid: tree, batch, csv, excel");
 
                 using var handler = DwgHandlerFactory.Open(file.FullName);
 
@@ -73,6 +73,38 @@ static partial class CommandBuilder
                         else
                             Console.WriteLine(output);
                     }
+                }
+                else if (format == "csv")
+                {
+                    // CSV output — flatten all entities
+                    var entities = handler.Query("");
+                    var output = OutputFormatter.FormatNodes(entities, OutputFormat.Csv);
+
+                    if (outPath == "-") outPath = null;
+                    if (outPath != null)
+                    {
+                        File.WriteAllText(outPath, output);
+                        Console.WriteLine(outPath);
+                    }
+                    else
+                    {
+                        if (json)
+                            Console.WriteLine(OutputFormatter.WrapEnvelope(output));
+                        else
+                            Console.WriteLine(output);
+                    }
+                }
+                else if (format == "excel")
+                {
+                    // Excel output — export all entities to .xlsx
+                    var entities = handler.Query("");
+                    var xlsxPath = outPath ?? Path.ChangeExtension(file.FullName, ".xlsx");
+                    ExcelExporter.ExportToFile(entities, xlsxPath);
+                    if (json)
+                        Console.WriteLine(OutputFormatter.WrapEnvelope(
+                            $"{{\"outputFile\":\"{xlsxPath.Replace("\\", "\\\\")}\",\"itemCount\":{entities.Count}}}"));
+                    else
+                        Console.WriteLine(xlsxPath);
                 }
                 else
                 {

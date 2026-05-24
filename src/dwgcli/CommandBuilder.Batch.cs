@@ -11,15 +11,19 @@ static partial class CommandBuilder
         var fileArg = new Argument<FileInfo>("file") { Description = "DWG file path" };
         var inputOpt = new Option<FileInfo?>("--input")
         {
-            Description = "JSON file containing batch commands. If omitted, reads from stdin"
+            Description = "Input file (JSON or shorthand text). If omitted, reads from stdin"
         };
         var commandsOpt = new Option<string?>("--commands")
         {
-            Description = "Inline JSON array of batch commands (alternative to --input or stdin)"
+            Description = "Inline commands (JSON array or shorthand text, alternative to --input or stdin)"
         };
         var stopOnErrorOpt = new Option<bool>("--stop-on-error")
         {
             Description = "Abort on first failure (default: continue and report per-item errors)"
+        };
+        var shorthandOpt = new Option<bool>("--shorthand")
+        {
+            Description = "Parse input as shorthand format (pipe-separated) instead of JSON"
         };
 
         var cmd = new Command("batch", "Execute multiple commands in a single open/save cycle");
@@ -28,6 +32,7 @@ static partial class CommandBuilder
         cmd.Add(inputOpt);
         cmd.Add(commandsOpt);
         cmd.Add(stopOnErrorOpt);
+        cmd.Add(shorthandOpt);
         cmd.Add(jsonOption);
 
         cmd.SetAction(result =>
@@ -39,51 +44,61 @@ static partial class CommandBuilder
                 var inputFile = result.GetValue(inputOpt);
                 var inlineCommands = result.GetValue(commandsOpt);
                 var stopOnError = result.GetValue(stopOnErrorOpt);
+                var shorthand = result.GetValue(shorthandOpt);
 
-                // Read JSON from one of the three sources
-                string jsonText;
+                // Read input text from one of the three sources
+                string inputText;
                 if (inlineCommands != null && inputFile != null)
                     throw new ArgumentException("--commands and --input are mutually exclusive.");
                 if (inlineCommands != null)
-                    jsonText = inlineCommands;
+                    inputText = inlineCommands;
                 else if (inputFile != null)
                 {
                     if (!inputFile.Exists)
                         throw new FileNotFoundException($"Input file not found: {inputFile.FullName}");
-                    jsonText = File.ReadAllText(inputFile.FullName);
+                    inputText = File.ReadAllText(inputFile.FullName);
                 }
                 else
                 {
                     if (Console.IsInputRedirected)
-                        jsonText = Console.In.ReadToEnd();
+                        inputText = Console.In.ReadToEnd();
                     else
-                        throw new ArgumentException("No input. Use --commands, --input, or pipe JSON to stdin.");
+                        throw new ArgumentException("No input. Use --commands, --input, or pipe to stdin.");
                 }
 
-                // Validate
-                using var jsonDoc = JsonDocument.Parse(jsonText);
-                if (jsonDoc.RootElement.ValueKind != JsonValueKind.Array)
-                    throw new ArgumentException("Batch input must be a JSON array.");
-
-                // Validate fields
-                int i = 0;
-                foreach (var elem in jsonDoc.RootElement.EnumerateArray())
+                // Parse items based on mode
+                List<BatchItem> items;
+                if (shorthand)
                 {
-                    if (elem.ValueKind == JsonValueKind.Object)
+                    items = ShorthandParser.Parse(inputText);
+                }
+                else
+                {
+                    // Validate JSON
+                    using var jsonDoc = JsonDocument.Parse(inputText);
+                    if (jsonDoc.RootElement.ValueKind != JsonValueKind.Array)
+                        throw new ArgumentException("Batch input must be a JSON array (or use --shorthand).");
+
+                    int i = 0;
+                    foreach (var elem in jsonDoc.RootElement.EnumerateArray())
                     {
-                        var unknown = new List<string>();
-                        foreach (var prop in elem.EnumerateObject())
+                        if (elem.ValueKind == JsonValueKind.Object)
                         {
-                            if (!BatchItem.KnownFields.Contains(prop.Name))
-                                unknown.Add(prop.Name);
+                            var unknown = new List<string>();
+                            foreach (var prop in elem.EnumerateObject())
+                            {
+                                if (!BatchItem.KnownFields.Contains(prop.Name))
+                                    unknown.Add(prop.Name);
+                            }
+                            if (unknown.Count > 0)
+                                throw new ArgumentException($"batch item[{i}]: unknown field(s): {string.Join(", ", unknown)}");
                         }
-                        if (unknown.Count > 0)
-                            throw new ArgumentException($"batch item[{i}]: unknown field(s): {string.Join(", ", unknown)}");
+                        i++;
                     }
-                    i++;
+
+                    items = JsonSerializer.Deserialize<List<BatchItem>>(inputText) ?? new();
                 }
 
-                var items = JsonSerializer.Deserialize<List<BatchItem>>(jsonText) ?? new();
                 if (items.Count == 0)
                 {
                     if (!file.Exists)

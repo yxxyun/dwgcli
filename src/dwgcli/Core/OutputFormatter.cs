@@ -8,7 +8,8 @@ namespace DwgCli.Core;
 internal enum OutputFormat
 {
     Text,
-    Json
+    Json,
+    Csv
 }
 
 /// <summary>
@@ -37,10 +38,63 @@ internal static class OutputFormatter
         if (format == OutputFormat.Json)
             return JsonSerializer.Serialize(new { matches = nodes.Count, results = nodes }, PublicJsonOptions);
 
+        if (format == OutputFormat.Csv)
+            return FormatNodesAsCsv(nodes);
+
         var sb = new StringBuilder();
         foreach (var node in nodes)
             sb.AppendLine(FormatNodeOneline(node));
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Format query results as CSV.
+    /// First row = headers (union of all property keys + path, type, text).
+    /// Subsequent rows = values per node.
+    /// </summary>
+    public static string FormatNodesAsCsv(List<DwgNode> nodes)
+    {
+        if (nodes.Count == 0) return "";
+
+        // Collect all property keys across all nodes
+        var headers = new List<string> { "path", "type", "text" };
+        var seenKeys = new HashSet<string> { "path", "type", "text" };
+        foreach (var node in nodes)
+        {
+            foreach (var key in node.Properties.Keys)
+            {
+                if (seenKeys.Add(key))
+                    headers.Add(key);
+            }
+        }
+
+        var sb = new StringBuilder();
+        // Header row
+        sb.AppendLine(string.Join(",", headers.Select(EscapeCsvField)));
+        // Data rows
+        foreach (var node in nodes)
+        {
+            var values = new List<string>();
+            values.Add(node.Path ?? "");
+            values.Add(node.Type ?? "");
+            values.Add(node.Text ?? "");
+            foreach (var key in headers.Skip(3))
+            {
+                if (node.Properties.TryGetValue(key, out var val))
+                    values.Add(EscapeCsvField(FormatValue(val)));
+                else
+                    values.Add("");
+            }
+            sb.AppendLine(string.Join(",", values));
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string EscapeCsvField(string field)
+    {
+        if (field.Contains(',') || field.Contains('"') || field.Contains('\n') || field.Contains('\r'))
+            return $"\"{field.Replace("\"", "\"\"")}\"";
+        return field;
     }
 
     public static string FormatInfo(Dictionary<string, object?> info, OutputFormat format)
