@@ -17,18 +17,42 @@ dotnet build -c Release          # output: src/dwgcli/bin/Release/net10.0/dwgcli
 ## Architecture
 
 ```
-src/dwgcli/
-├── Program.cs              # Entry point — forces UTF8 output, dispatches to CommandBuilder
-├── CommandBuilder.cs       # Root command registration + SafeRun + batch executor + ParsePropsArray
-├── CommandBuilder.*.cs     # One partial class file per command
-└── Core/
-    ├── IDwgHandler.cs      # Interface: GetInfo, Get, Dump, Query, Set, Add, Remove, Purge, Stats, Save
-    ├── DwgHandler.cs       # ~1550 lines — all CRUD logic on ACadSharp CadDocument
-    ├── DwgHandlerFactory.cs # Opens .dwg (DwgReader) or .dxf (DxfReader), returns IDwgHandler
-    ├── DwgNode.cs          # Tree node model: path, type, properties, children
-    ├── BatchItem.cs        # Batch command model + KnownFields validation set
-    └── OutputFormatter.cs  # Text/JSON formatting + WrapEnvelope helpers
+src/
+├── dwgcli/                             # CLI 工具
+│   ├── Program.cs                      # Entry point
+│   ├── CommandBuilder.cs + partials    # 命令注册
+│   └── Core/
+│       ├── IDwgHandler.cs              # 文档操作接口
+│       ├── DwgHandler.cs + 6 partials  # 核心实现
+│       ├── DwgNode.cs / BatchItem.cs   # 数据模型
+│       └── ...                         # 辅助模块
+│
+├── dwgcli-mcp/                         # MCP Server
+│   ├── Program.cs                      # 4 unified tools + 9 Obsolete + shorthand
+│   ├── DwgHelper.cs                    # 执行中间件
+│   └── DwgComAutomation.cs             # CAD COM 自动化（可选，需 AutoCAD）
+│
+└── tests/                              # xUnit 测试
 ```
+
+## MCP Server（dwgcli-mcp）
+
+```
+src/dwgcli-mcp/
+├── Program.cs                    # 4 unified tools + 9 Obsolete + shorthand
+├── DwgHelper.cs                  # ExecuteRead/ExecuteWrite + JSON 输出
+└── DwgComAutomation.cs           # CAD COM 自动化（可选，需 AutoCAD）
+```
+
+**MCP Tools 清单**：
+- `dwg_query` — 统一读工具（info/get/query/dump/stats）
+- `dwg_edit` — 统一写工具（set/add/remove/purge）
+- `dwg_shorthand` — 简写格式批量操作
+- `dwg_cad` — CAD 自动化工具（可选，需 AutoCAD）→ 截图/PNG导出/PDF打印/打开图纸
+
+**Key pattern**: `DwgComAutomation` 使用 `GetShared()` 共享单例，MCP 会话内复用 COM 连接，避免每次调用都启动/关闭 AutoCAD。无 AutoCAD 时静默降级。
+
+## CLI Architecture
 
 **Key pattern**: `CommandBuilder` is a `static partial class`. Each command lives in its own `CommandBuilder.{Name}.cs` file. All commands share a single `--json` option passed from `BuildRootCommand()`.
 
@@ -59,8 +83,14 @@ The `block import` command manipulates `handler.Document` directly (not through 
 
 ## Dependencies
 
+### dwgcli（CLI）
 - **ACadSharp 3.4.9** — DWG/DXF read/write. In-memory only (no file locks after read).
 - **System.CommandLine 3.0.0-preview** — CLI parsing. Uses `cmd.SetAction()` pattern (not the older `Handler.SetHandler`).
+
+### dwgcli-mcp（MCP Server）
+- **ModelContextProtocol 1.3.0** — MCP SDK
+- **System.Drawing.Common 9.x** — 截图（仅 Windows）
+- **ACadSharp 3.4.9** — DWG/DXF 读写（通过 dwgcli 项目引用）
 
 ## Conventions
 

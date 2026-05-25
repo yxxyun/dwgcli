@@ -570,7 +570,8 @@ MCP Server 将 dwgcli 的核心功能通过 dispatch 机制暴露为统一工具
 - **结构化参数** — AI 直接传参，无需拼接命令行字符串
 - **统一 JSON 响应** — 所有工具返回标准 JSON + `_meta` UI 元数据
 - **共享核心代码** — 直接引用 ACadSharp 和 DwgHandler，与 CLI 行为一致
-- **dispatch 模式** — `dwg_query`（读操作）+ `dwg_edit`（写操作）两个核心工具
+- **dispatch 模式** — `dwg_query`（读操作）+ `dwg_edit`（写操作）+ `dwg_cad`（CAD 自动化）三个核心工具
+- **CAD 自动化（可选）** — `DwgComAutomation` 通过 COM 接口调用 AutoCAD，实现截图/PNG 导出/PDF 打印，无需 AutoCAD 时静默降级
 
 ### 构建和发布
 
@@ -592,7 +593,8 @@ dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 |------|------|------|
 | `dwg_query` | `filePath`, `operations` | **统一读工具** — dispatch 支持 info/get/query/dump/stats |
 | `dwg_edit` | `filePath`, `operations` | **统一写工具** — dispatch 支持 set/add/remove/purge/batch/layer |
-| `dwg_shorthand` | `filePath`, `shorthand`, `stopOnError` | 简写格式批量操作（Phase 3 新增） |
+| `dwg_shorthand` | `filePath`, `shorthand`, `stopOnError` | 简写格式批量操作 |
+| `dwg_cad` | `action`, `parameters` | **CAD 自动化工具**（可选，需 AutoCAD） |
 
 **旧工具（已标记 `[Obsolete]`，保持兼容）：**
 
@@ -607,6 +609,54 @@ dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 | `dwg_add` | 委托到 `dwg_edit` |
 | `dwg_remove` | 委托到 `dwg_edit` |
 | `dwg_purge` | 委托到 `dwg_edit` |
+
+### `dwg_cad` — CAD 自动化工具（可选）
+
+> ⚠️ **仅在安装了 AutoCAD 的 Windows 机器上可用**。无 AutoCAD 时工具会返回明确错误，不影响其他功能。
+
+通过 AutoCAD COM 接口实现 dwgcli 自身无法做到的渲染/截图/PDF 导出。MCP 会话内共享连接，避免重复启动。
+
+**支持的 actions：**
+
+| Action | 参数 | 说明 |
+|--------|------|------|
+| `is_available` | 无 | 检测 AutoCAD 是否已安装（不启动进程） |
+| `screenshot` | 无 | 截取 AutoCAD 窗口，返回 base64 PNG |
+| `export_png` | `filePath`, `output` | CAD 引擎渲染导出 PNG（比截图清晰，无窗口装饰） |
+| `plot_pdf` | `filePath`, `output`, `paperSize`, `plotter`, `xMin/yMin/xMax/yMax` | PLOT 到 PDF |
+| `open` | `filePath` | 在 AutoCAD 中打开图纸 |
+| `zoom_extents` | 无 | 缩放到全图 |
+
+**使用示例：**
+
+```json
+// 截图
+{ "action": "screenshot" }
+
+// PNG 导出（推荐，更清晰）
+{ "action": "export_png", "filePath": "drawing.dwg", "output": "drawing.png" }
+
+// PLOT 到 PDF
+{
+  "action": "plot_pdf",
+  "filePath": "drawing.dwg",
+  "xMin": 0, "yMin": 0,
+  "xMax": 841, "yMax": 594,
+  "paperSize": "A1"
+}
+
+// 在 CAD 中打开查看
+{ "action": "open", "filePath": "drawing.dwg" }
+```
+
+**对比：`export_png` vs `screenshot`**
+
+| | `export_png` | `screenshot` |
+|---|---|---|
+| 渲染方式 | CAD 引擎渲染（PNGOUT 命令） | 窗口截图 |
+| 窗口需求 | 无需窗口可见 | 窗口必须可见 |
+| 图像质量 | 高（纯矢量渲染） | 受窗口分辨率影响 |
+| 适用场景 | AI 批处理、自动化 | 调试、人工查看 |
 
 ### `dwg_query` 使用示例
 
@@ -692,8 +742,9 @@ src/
 │           └── DwgExceptions.cs         # 9 个领域异常
 │
 ├── dwgcli-mcp/                          # MCP Server（AI 代理集成）
-│   ├── Program.cs                       # 2 unified tools + 9 Obsolete + shorthand
-│   └── DwgHelper.cs                     # ExecuteRead/ExecuteWrite 中间件
+│   ├── Program.cs                       # 4 unified tools (query/edit/shorthand/cad) + 9 Obsolete
+│   ├── DwgHelper.cs                     # ExecuteRead/ExecuteWrite 中间件
+│   └── DwgComAutomation.cs              # CAD COM 自动化（可选，需 AutoCAD）
 │
 └── tests/
     └── dwgcli.Tests/                    # xUnit 单元测试
@@ -709,6 +760,7 @@ src/
 - [System.CommandLine](https://github.com/dotnet/command-line-api) — CLI 解析
 - [ClosedXML](https://github.com/ClosedXML/ClosedXML) — Excel 导出
 - [ModelContextProtocol](https://github.com/modelcontextprotocol/csharp-sdk) — MCP SDK（仅 dwgcli-mcp）
+- [System.Drawing.Common](https://www.nuget.org/packages/System.Drawing.Common/) — 截图（仅 dwgcli-mcp，仅 Windows）
 
 ## 许可
 

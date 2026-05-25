@@ -433,6 +433,176 @@ public sealed class DwgTools
     public static string dwg_purge(
         [Description("Path to the .dwg or .dxf file")] string filePath) =>
         dwg_edit(filePath, """[{"action":"purge"}]""");
+
+    // ==================== CAD Automation Tool (optional, requires AutoCAD) ====================
+
+    /// <summary>
+    /// Dispatch map for CAD automation operations.
+    /// Uses shared DwgComAutomation instance (MCP 会话内复用)。
+    /// </summary>
+    private static readonly Dictionary<string, Func<JsonObject, string>> _cadDispatch = new()
+    {
+        ["is_available"] = static _ =>
+        {
+            var available = DwgComAutomation.IsAutoCADAvailable();
+            return new JsonObject
+            {
+                ["success"] = true,
+                ["available"] = available,
+                ["detail"] = available ? "AutoCAD detected" : "AutoCAD not found"
+            }.ToJsonString(DwgHelper.JsonOpts);
+        },
+
+        ["screenshot"] = static spec =>
+        {
+            var cad = DwgComAutomation.GetShared(visible: false);
+            if (!cad.IsConnected)
+                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD. Is it installed and running?");
+
+            var pngBase64 = cad.Screenshot();
+            if (pngBase64 == null)
+                return DwgHelper.WrapEnvelopeError("Screenshot failed. Make sure AutoCAD window is visible.");
+
+            return new JsonObject
+            {
+                ["success"] = true,
+                ["data"] = pngBase64,
+                ["mimeType"] = "image/png",
+                ["_meta"] = new JsonObject
+                {
+                    ["ui"] = new JsonObject
+                    {
+                        ["type"] = "image",
+                        ["resourceUri"] = "data:image/png;base64," + pngBase64
+                    }
+                }
+            }.ToJsonString(DwgHelper.JsonOpts);
+        },
+
+        ["export_png"] = static spec =>
+        {
+            var dwgPath = GetString(spec, "filePath");
+            var output = GetString(spec, "output") ?? Path.ChangeExtension(dwgPath, ".png");
+
+            if (string.IsNullOrEmpty(dwgPath))
+                return DwgHelper.WrapEnvelopeError("'filePath' is required");
+            if (!File.Exists(dwgPath))
+                return DwgHelper.WrapEnvelopeError($"File not found: {dwgPath}");
+
+            var cad = DwgComAutomation.GetShared(visible: false);
+            if (!cad.IsConnected)
+                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD");
+
+            var ok = cad.ExportPng(dwgPath, output);
+            if (!ok)
+                return DwgHelper.WrapEnvelopeError("PNG export failed");
+
+            return DwgHelper.WrapEnvelopeText($"Exported PNG: {output}");
+        },
+
+        ["plot_pdf"] = static spec =>
+        {
+            var dwgPath = GetString(spec, "filePath");
+            var output = GetString(spec, "output") ?? Path.ChangeExtension(dwgPath, ".pdf");
+            var paperSize = GetString(spec, "paperSize") ?? "A1";
+            var plotter = GetString(spec, "plotter") ?? "DWG To PDF.pc3";
+            var xMin = GetDouble(spec, "xMin") ?? 0;
+            var yMin = GetDouble(spec, "yMin") ?? 0;
+            var xMax = GetDouble(spec, "xMax") ?? 1000;
+            var yMax = GetDouble(spec, "yMax") ?? 1000;
+
+            if (string.IsNullOrEmpty(dwgPath))
+                return DwgHelper.WrapEnvelopeError("'filePath' is required");
+            if (!File.Exists(dwgPath))
+                return DwgHelper.WrapEnvelopeError($"File not found: {dwgPath}");
+
+            var cad = DwgComAutomation.GetShared(visible: false);
+            if (!cad.IsConnected)
+                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD");
+
+            var ok = cad.PlotWindowToPdf(dwgPath, xMin, yMin, xMax, yMax, output, paperSize, plotter);
+            if (!ok)
+                return DwgHelper.WrapEnvelopeError("PDF plot failed");
+
+            return DwgHelper.WrapEnvelopeText($"Plotted PDF: {output}");
+        },
+
+        ["open"] = static spec =>
+        {
+            var dwgPath = GetString(spec, "filePath");
+            if (string.IsNullOrEmpty(dwgPath))
+                return DwgHelper.WrapEnvelopeError("'filePath' is required");
+            if (!File.Exists(dwgPath))
+                return DwgHelper.WrapEnvelopeError($"File not found: {dwgPath}");
+
+            var cad = DwgComAutomation.GetShared(visible: true);
+            if (!cad.IsConnected)
+                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD");
+
+            var ok = cad.OpenInCad(dwgPath);
+            return ok
+                ? DwgHelper.WrapEnvelopeText($"Opened {dwgPath} in AutoCAD")
+                : DwgHelper.WrapEnvelopeError("Failed to open file in AutoCAD");
+        },
+
+        ["zoom_extents"] = static spec =>
+        {
+            var cad = DwgComAutomation.GetShared(visible: false);
+            if (!cad.IsConnected)
+                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD");
+
+            return cad.ZoomExtents()
+                ? DwgHelper.WrapEnvelopeText("Zoomed to extents")
+                : DwgHelper.WrapEnvelopeError("Zoom extents failed");
+        },
+    };
+
+    private static string GetString(JsonObject obj, string key)
+    {
+        return obj.TryGetPropertyValue(key, out var node) && node != null
+            ? node.GetValue<string>() ?? ""
+            : "";
+    }
+
+    private static double? GetDouble(JsonObject obj, string key)
+    {
+        if (obj.TryGetPropertyValue(key, out var node) && node != null)
+        {
+            if (node.GetValueKind() == System.Text.Json.JsonValueKind.Number)
+                return node.GetValue<double>();
+            if (double.TryParse(node.GetValue<string>(), out var val))
+                return val;
+        }
+        return null;
+    }
+
+    [McpServerTool, Description("CAD Automation — requires AutoCAD installed. Actions: is_available, screenshot, export_png, plot_pdf, open, zoom_extents")]
+    public static string dwg_cad(
+        [Description("Action to perform")] string action,
+        [Description("JSON parameters for the action")] string parameters = "{}")
+    {
+        if (string.IsNullOrEmpty(action))
+            return DwgHelper.WrapEnvelopeError("'action' is required. Supported: is_available, screenshot, export_png, plot_pdf, open, zoom_extents");
+
+        try
+        {
+            var spec = JsonSerializer.Deserialize<JsonObject>(parameters) ?? new JsonObject();
+
+            if (!_cadDispatch.TryGetValue(action.ToLowerInvariant(), out var handler))
+                return DwgHelper.WrapEnvelopeError(
+                    $"Unknown action '{action}'. Supported: {string.Join(", ", _cadDispatch.Keys)}");
+
+            return handler(spec);
+        }
+        catch (JsonException ex)
+        {
+            return DwgHelper.WrapEnvelopeError($"Invalid JSON in parameters: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return DwgHelper.WrapEnvelopeError($"CAD automation error: {ex.Message}");
+        }
+    }
 }
 
 public static class Program
