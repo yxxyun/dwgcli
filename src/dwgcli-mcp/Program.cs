@@ -434,7 +434,18 @@ public sealed class DwgTools
         [Description("Path to the .dwg or .dxf file")] string filePath) =>
         dwg_edit(filePath, """[{"action":"purge"}]""");
 
-    // ==================== CAD Automation Tool (optional, requires AutoCAD) ====================
+    // ==================== CAD Automation Tool (optional) ====================
+
+    /// <summary>Helper: 从 spec 提取 cadType 参数。</summary>
+    private static string? GetCadType(JsonObject spec) =>
+        spec.TryGetPropertyValue("cadType", out var n) && n != null ? n.GetValue<string>() : null;
+
+    /// <summary>Helper: 获取共享 CAD 实例，支持指定类型。</summary>
+    private static DwgComAutomation GetCad(JsonObject spec, bool visible = false)
+    {
+        var cadType = GetCadType(spec);
+        return DwgComAutomation.GetShared(visible, cadType);
+    }
 
     /// <summary>
     /// Dispatch map for CAD automation operations.
@@ -442,31 +453,35 @@ public sealed class DwgTools
     /// </summary>
     private static readonly Dictionary<string, Func<JsonObject, string>> _cadDispatch = new()
     {
-        ["is_available"] = static _ =>
+        ["is_available"] = static spec =>
         {
-            var available = DwgComAutomation.IsAutoCADAvailable();
+            var cads = DwgComAutomation.GetAvailableCads();
             return new JsonObject
             {
                 ["success"] = true,
-                ["available"] = available,
-                ["detail"] = available ? "AutoCAD detected" : "AutoCAD not found"
+                ["available"] = cads.Count > 0,
+                ["cads"] = new JsonArray(cads.Select(c => JsonValue.Create(c)).ToArray()),
+                ["detail"] = cads.Count > 0
+                    ? $"Detected: {string.Join(", ", cads)}"
+                    : "No CAD application found"
             }.ToJsonString(DwgHelper.JsonOpts);
         },
 
         ["screenshot"] = static spec =>
         {
-            var cad = DwgComAutomation.GetShared(visible: false);
+            var cad = GetCad(spec);
             if (!cad.IsConnected)
-                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD. Is it installed and running?");
+                return DwgHelper.WrapEnvelopeError("Cannot connect to CAD. Install AutoCAD/ZWCAD/GstarCAD/BricsCAD first.");
 
             var pngBase64 = cad.Screenshot();
             if (pngBase64 == null)
-                return DwgHelper.WrapEnvelopeError("Screenshot failed. Make sure AutoCAD window is visible.");
+                return DwgHelper.WrapEnvelopeError("Screenshot failed. Make sure the CAD window is visible.");
 
             return new JsonObject
             {
                 ["success"] = true,
                 ["data"] = pngBase64,
+                ["cadType"] = cad.ConnectedCadType,
                 ["mimeType"] = "image/png",
                 ["_meta"] = new JsonObject
                 {
@@ -489,15 +504,15 @@ public sealed class DwgTools
             if (!File.Exists(dwgPath))
                 return DwgHelper.WrapEnvelopeError($"File not found: {dwgPath}");
 
-            var cad = DwgComAutomation.GetShared(visible: false);
+            var cad = GetCad(spec);
             if (!cad.IsConnected)
-                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD");
+                return DwgHelper.WrapEnvelopeError("Cannot connect to CAD. Install AutoCAD/ZWCAD/GstarCAD/BricsCAD first.");
 
             var ok = cad.ExportPng(dwgPath, output);
             if (!ok)
                 return DwgHelper.WrapEnvelopeError("PNG export failed");
 
-            return DwgHelper.WrapEnvelopeText($"Exported PNG: {output}");
+            return DwgHelper.WrapEnvelopeText($"Exported PNG: {output} (via {cad.ConnectedCadType})");
         },
 
         ["plot_pdf"] = static spec =>
@@ -516,15 +531,15 @@ public sealed class DwgTools
             if (!File.Exists(dwgPath))
                 return DwgHelper.WrapEnvelopeError($"File not found: {dwgPath}");
 
-            var cad = DwgComAutomation.GetShared(visible: false);
+            var cad = GetCad(spec);
             if (!cad.IsConnected)
-                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD");
+                return DwgHelper.WrapEnvelopeError("Cannot connect to CAD. Install AutoCAD/ZWCAD/GstarCAD/BricsCAD first.");
 
             var ok = cad.PlotWindowToPdf(dwgPath, xMin, yMin, xMax, yMax, output, paperSize, plotter);
             if (!ok)
                 return DwgHelper.WrapEnvelopeError("PDF plot failed");
 
-            return DwgHelper.WrapEnvelopeText($"Plotted PDF: {output}");
+            return DwgHelper.WrapEnvelopeText($"Plotted PDF: {output} (via {cad.ConnectedCadType})");
         },
 
         ["open"] = static spec =>
@@ -535,24 +550,24 @@ public sealed class DwgTools
             if (!File.Exists(dwgPath))
                 return DwgHelper.WrapEnvelopeError($"File not found: {dwgPath}");
 
-            var cad = DwgComAutomation.GetShared(visible: true);
+            var cad = GetCad(spec, visible: true);
             if (!cad.IsConnected)
-                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD");
+                return DwgHelper.WrapEnvelopeError("Cannot connect to CAD. Install AutoCAD/ZWCAD/GstarCAD/BricsCAD first.");
 
             var ok = cad.OpenInCad(dwgPath);
             return ok
-                ? DwgHelper.WrapEnvelopeText($"Opened {dwgPath} in AutoCAD")
-                : DwgHelper.WrapEnvelopeError("Failed to open file in AutoCAD");
+                ? DwgHelper.WrapEnvelopeText($"Opened {dwgPath} in {cad.ConnectedCadType}")
+                : DwgHelper.WrapEnvelopeError("Failed to open file in CAD");
         },
 
         ["zoom_extents"] = static spec =>
         {
-            var cad = DwgComAutomation.GetShared(visible: false);
+            var cad = GetCad(spec);
             if (!cad.IsConnected)
-                return DwgHelper.WrapEnvelopeError("Cannot connect to AutoCAD");
+                return DwgHelper.WrapEnvelopeError("Cannot connect to CAD. Install AutoCAD/ZWCAD/GstarCAD/BricsCAD first.");
 
             return cad.ZoomExtents()
-                ? DwgHelper.WrapEnvelopeText("Zoomed to extents")
+                ? DwgHelper.WrapEnvelopeText($"Zoomed to extents (via {cad.ConnectedCadType})")
                 : DwgHelper.WrapEnvelopeError("Zoom extents failed");
         },
     };
@@ -576,13 +591,13 @@ public sealed class DwgTools
         return null;
     }
 
-    [McpServerTool, Description("CAD Automation — requires AutoCAD installed. Actions: is_available, screenshot, export_png, plot_pdf, open, zoom_extents")]
+    [McpServerTool, Description("CAD Automation — requires AutoCAD/ZWCAD/GstarCAD/BricsCAD. Actions: is_available, screenshot, export_png, plot_pdf, open, zoom_extents. Optional param cadType: AutoCAD, ZWCAD, GstarCAD, BricsCAD")]
     public static string dwg_cad(
         [Description("Action to perform")] string action,
         [Description("JSON parameters for the action")] string parameters = "{}")
     {
         if (string.IsNullOrEmpty(action))
-            return DwgHelper.WrapEnvelopeError("'action' is required. Supported: is_available, screenshot, export_png, plot_pdf, open, zoom_extents");
+            return DwgHelper.WrapEnvelopeError("'action' is required. Supported: is_available, screenshot, export_png, plot_pdf, open, zoom_extents. Optional param: cadType (AutoCAD/ZWCAD/GstarCAD/BricsCAD)");
 
         try
         {
