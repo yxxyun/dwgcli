@@ -594,7 +594,7 @@ dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 | `dwg_query` | `filePath`, `operations` | **统一读工具** — dispatch 支持 info/get/query/dump/stats |
 | `dwg_edit` | `filePath`, `operations` | **统一写工具** — dispatch 支持 set/add/remove/purge/batch/layer |
 | `dwg_shorthand` | `filePath`, `shorthand`, `stopOnError` | 简写格式批量操作 |
-| `dwg_cad` | `action`, `parameters` | **CAD 自动化工具**（可选，需 AutoCAD） |
+| `dwg_cad` | `action`, `parameters` | **CAD 自动化工具**（可选，需 AutoCAD/ZWCAD/GstarCAD/BricsCAD） |
 
 **旧工具（已标记 `[Obsolete]`，保持兼容）：**
 
@@ -612,29 +612,42 @@ dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 
 ### `dwg_cad` — CAD 自动化工具（可选）
 
-> ⚠️ **仅在安装了 AutoCAD 的 Windows 机器上可用**。无 AutoCAD 时工具会返回明确错误，不影响其他功能。
+> ⚠️ **仅在安装了 AutoCAD / ZWCAD / GstarCAD / BricsCAD 的 Windows 机器上可用**。
+> 自动按优先级检测（AutoCAD → ZWCAD → GstarCAD → BricsCAD），也可通过 `cadType` 参数指定。
+> 无 CAD 时工具返回明确错误，不影响其他功能。
 
-通过 AutoCAD COM 接口实现 dwgcli 自身无法做到的渲染/截图/PDF 导出。MCP 会话内共享连接，避免重复启动。
+通过 CAD COM 接口实现 dwgcli 自身无法做到的渲染/截图/PDF 导出。MCP 会话内共享连接，避免重复启动。
 
 **支持的 actions：**
 
 | Action | 参数 | 说明 |
 |--------|------|------|
-| `is_available` | 无 | 检测 AutoCAD 是否已安装（不启动进程） |
-| `screenshot` | 无 | 截取 AutoCAD 窗口，返回 base64 PNG |
-| `export_png` | `filePath`, `output` | CAD 引擎渲染导出 PNG（比截图清晰，无窗口装饰） |
-| `plot_pdf` | `filePath`, `output`, `paperSize`, `plotter`, `xMin/yMin/xMax/yMax` | PLOT 到 PDF |
-| `open` | `filePath` | 在 AutoCAD 中打开图纸 |
-| `zoom_extents` | 无 | 缩放到全图 |
+| `is_available` | 无 | 检测已安装的 CAD，返回列表（如 `["ZWCAD","GstarCAD"]`） |
+| `screenshot` | `cadType`（可选） | 截取 CAD 窗口，返回 base64 PNG |
+| `export_png` | `filePath`, `output`, `cadType`（可选） | CAD 引擎渲染导出 PNG（比截图清晰，无窗口装饰） |
+| `plot_pdf` | `filePath`, `output`, `paperSize`, `plotter`, `xMin/yMin/xMax/yMax`, `cadType`（可选） | PLOT 到 PDF |
+| `open` | `filePath`, `cadType`（可选） | 在 CAD 中打开图纸 |
+| `zoom_extents` | `cadType`（可选） | 缩放到全图 |
+
+> 所有 action 都支持可选参数 `cadType`（`"AutoCAD"` / `"ZWCAD"` / `"GstarCAD"` / `"BricsCAD"`），不指定时自动检测。
 
 **使用示例：**
 
 ```json
-// 截图
+// 查看已安装的 CAD
+{ "action": "is_available" }
+
+// 截图（自动检测）
 { "action": "screenshot" }
+
+// 强制使用 ZWCAD 截图
+{ "action": "screenshot", "cadType": "ZWCAD" }
 
 // PNG 导出（推荐，更清晰）
 { "action": "export_png", "filePath": "drawing.dwg", "output": "drawing.png" }
+
+// 用 GstarCAD 导出 PNG
+{ "action": "export_png", "filePath": "drawing.dwg", "output": "drawing.png", "cadType": "GstarCAD" }
 
 // PLOT 到 PDF
 {
@@ -648,6 +661,19 @@ dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 // 在 CAD 中打开查看
 { "action": "open", "filePath": "drawing.dwg" }
 ```
+
+**响应示例（`is_available`）：**
+
+```json
+{
+  "success": true,
+  "available": true,
+  "cads": ["ZWCAD", "GstarCAD"],
+  "detail": "Detected: ZWCAD, GstarCAD"
+}
+```
+
+所有操作在响应中会附带 `cadType` 字段，指示实际连接的 CAD 类型。
 
 **对比：`export_png` vs `screenshot`**
 

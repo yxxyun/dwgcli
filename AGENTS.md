@@ -48,9 +48,9 @@ src/dwgcli-mcp/
 - `dwg_query` — 统一读工具（info/get/query/dump/stats）
 - `dwg_edit` — 统一写工具（set/add/remove/purge）
 - `dwg_shorthand` — 简写格式批量操作
-- `dwg_cad` — CAD 自动化工具（可选，需 AutoCAD）→ 截图/PNG导出/PDF打印/打开图纸
+- `dwg_cad` — CAD 自动化工具（可选，需 AutoCAD/ZWCAD/GstarCAD/BricsCAD）→ 截图/PNG导出/PDF打印/打开图纸
 
-**Key pattern**: `DwgComAutomation` 使用 `GetShared()` 共享单例，MCP 会话内复用 COM 连接，避免每次调用都启动/关闭 AutoCAD。无 AutoCAD 时静默降级。
+**Key pattern**: `DwgComAutomation` 使用 `GetShared()` 共享单例，MCP 会话内复用 COM 连接，避免每次调用都启动/关闭 CAD。自动检测已安装的 CAD（AutoCAD → ZWCAD → GstarCAD → BricsCAD 优先级），支持 `cadType` 参数指定。无 CAD 时静默降级。
 
 ## CLI Architecture
 
